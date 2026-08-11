@@ -1,0 +1,3 @@
+## SDK and NDK paths - edit these for your machine
+# sdk.dir=/home/user/Android/Sdk
+# ndk.dir=/home/user/Android/Sdk/ndk/27.0.12077973
