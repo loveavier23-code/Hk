@@ -1,0 +1,4 @@
+ccxt>=4.3
+fastapi>=0.110
+uvicorn>=0.29
+pandas>=2.0

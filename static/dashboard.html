@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trading Bot Platform</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --green: #3fb950;
+    --red: #f85149;
+    --accent: #58a6ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    padding: 24px;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  h1 { font-size: 18px; font-weight: 600; letter-spacing: 0.5px; }
+  #status { font-size: 12px; color: var(--muted); }
+  #status .dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 6px; background: var(--muted);
+  }
+  #status .dot.ok { background: var(--green); }
+  #status .dot.err { background: var(--red); }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 360px;
+    gap: 16px;
+  }
+  @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 12px; }
+  canvas { width: 100%; height: 420px; display: block; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  .buy { color: var(--green); }
+  .sell { color: var(--red); }
+  .hold { color: var(--muted); }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 12px; color: var(--muted); margin-bottom: 16px; }
+  .meta b { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Trading Bot Platform</h1>
+  <div id="status"><span class="dot"></span><span id="status-text">connecting...</span></div>
+</header>
+
+<div class="meta" id="meta"></div>
+
+<div class="grid">
+  <div class="panel">
+    <h2>Price — close (live exchange data)</h2>
+    <canvas id="chart"></canvas>
+  </div>
+  <div class="panel">
+    <h2>Signals</h2>
+    <div style="max-height:420px; overflow-y:auto;">
+      <table>
+        <thead><tr><th>Time</th><th>Action</th><th>Price</th></tr></thead>
+        <tbody id="signals"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const el = {
+  status: document.getElementById('status-text'),
+  statusDot: document.querySelector('#status .dot'),
+  meta: document.getElementById('meta'),
+  signals: document.getElementById('signals'),
+};
+const chart = document.getElementById('chart');
+const ctx = chart.getContext('2d');
+
+function fmtTs(ms) {
+  const d = new Date(ms);
+  return d.toLocaleTimeString([], { hour12: false });
+}
+
+function drawChart(candles) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = chart.clientWidth, h = 420;
+  chart.width = w * dpr;
+  chart.height = h * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  if (!candles || candles.length < 2) {
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '12px monospace';
+    ctx.fillText('no data yet', 12, 24);
+    return;
+  }
+
+  const closes = candles.map(c => c.close);
+  const min = Math.min(...closes), max = Math.max(...closes);
+  const pad = (max - min) * 0.08 || max * 0.001;
+  const lo = min - pad, hi = max + pad;
+  const x = i => (i / (closes.length - 1)) * w;
+  const y = v => h - ((v - lo) / (hi - lo)) * (h - 24) - 12;
+
+  ctx.strokeStyle = '#58a6ff';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  closes.forEach((v, i) => i === 0 ? ctx.moveTo(x(i), y(v)) : ctx.lineTo(x(i), y(v)));
+  ctx.stroke();
+
+  const last = closes[closes.length - 1];
+  ctx.fillStyle = last >= closes[closes.length - 2] ? '#3fb950' : '#f85149';
+  ctx.font = '12px monospace';
+  ctx.fillText('$' + last.toFixed(2), 12, 20);
+}
+
+async function refresh() {
+  try {
+    const [health, cfg, candles, signals] = await Promise.all([
+      fetch('/api/health').then(r => r.json()),
+      fetch('/api/config').then(r => r.json()),
+      fetch('/api/candles?limit=500').then(r => r.json()),
+      fetch('/api/signals?limit=20').then(r => r.json()),
+    ]);
+
+    const ok = health.status === 'running';
+    el.statusDot.className = 'dot' + (health.last_error ? ' err' : (ok ? ' ok' : ''));
+    el.status.textContent = health.last_error
+      ? 'running — error: ' + health.last_error
+      : (ok ? 'running · ' + health.ticks + ' ticks · last ' + fmtTs(health.last_tick_ts) : 'stopped');
+
+    el.meta.innerHTML =
+      '<span>Exchange: <b>' + cfg.exchange + '</b></span>' +
+      '<span>Symbol: <b>' + cfg.symbol + '</b></span>' +
+      '<span>Timeframe: <b>' + cfg.timeframe + '</b></span>' +
+      '<span>Strategy: <b>' + cfg.strategy + '</b></span>' +
+      '<span>Mode: <b>' + cfg.mode + '</b></span>' +
+      '<span>Interval: <b>' + cfg.interval_seconds + 's</b></span>' +
+      '<span>Keys: <b>' + (cfg.credentials_configured ? 'set' : 'not set') + '</b></span>';
+
+    drawChart(candles.candles);
+
+    el.signals.innerHTML = signals.signals.map(s =>
+      '<tr><td>' + fmtTs(s.ts) + '</td>' +
+      '<td class="' + s.action + '">' + s.action.toUpperCase() + '</td>' +
+      '<td>$' + Number(s.price).toFixed(2) + '</td></tr>'
+    ).join('') || '<tr><td colspan="3">no signals yet</td></tr>';
+  } catch (e) {
+    el.statusDot.className = 'dot err';
+    el.status.textContent = 'api unreachable: ' + e.message;
+  }
+}
+
+refresh();
+setInterval(refresh, 5000);
+window.addEventListener('resize', () => drawChart(lastCandles || []));
+let lastCandles = null;
+const origDraw = drawChart;
+drawChart = (c) => { lastCandles = c; origDraw(c); };
+</script>
+</body>
+</html>
